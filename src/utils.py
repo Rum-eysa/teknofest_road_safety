@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
-"""
-Teknofest Road Safety - Utility fonksiyonlari
-- ASCII-safe etiketler
-- Turkce karakter ozellikleri
-"""
 import cv2
 import re
 import sys
 from typing import Any
 
-from loguru import logger as loguru_logger
+try:
+    from loguru import logger as loguru_logger
+except ImportError:
+    loguru_logger = None
 
 VALID_VEHICLE_TYPES = {
     "sedan", "suv", "hatchback", "pickup", "minibus", "panelvan", "kamyon"
@@ -26,11 +24,6 @@ VALID_DRIVER_ACTIONS = {
 VALID_OBJECTS = {"teknocan", "bilgisayar"}
 VALID_PASSENGERS = {"arka_koltuk_1", "arka_koltuk_2", "on_koltuk"}
 
-# -------------------------------------------------------------------
-# Model A: Roboflow alfabetik export sirasi (Roboflow data.yaml ile eslesir)
-# hatchback=0, kamyon=1, minibus=2, panelvan=3, pickup=4,
-# plaka=5, sedan=6, suv=7
-# -------------------------------------------------------------------
 MODEL_A_YOLO_CLASSES = [
     "hatchback",   # 0
     "kamyon",      # 1
@@ -42,11 +35,6 @@ MODEL_A_YOLO_CLASSES = [
     "suv",         # 7
 ]
 
-# -------------------------------------------------------------------
-# Model B: Roboflow alfabetik export sirasi
-# kemer_takili: modelin ogrenecegi ama JSON'a YAZILMAYACAK class
-# Neden var? emniyet_kemeri_ihlali ile karsilastirmali ogrenmesi icin
-# -------------------------------------------------------------------
 MODEL_B_YOLO_CLASSES = [
     "arka_koltuk_1",           # 0
     "arka_koltuk_2",           # 1
@@ -55,7 +43,7 @@ MODEL_B_YOLO_CLASSES = [
     "emniyet_kemeri_ihlali",   # 4
     "esneme",                  # 5
     "etrafa_bakinma",          # 6
-    "kemer_takili",            # 7  -- JSON'a yazilmaz, sadece egitimde kontrast saglar
+    "kemer_takili",            # 7
     "on_koltuk",               # 8
     "sigara_icme",             # 9
     "su_icme",                 # 10
@@ -63,10 +51,6 @@ MODEL_B_YOLO_CLASSES = [
     "telefonla_konusma",       # 12
 ]
 
-# -------------------------------------------------------------------
-# Inference sirasinda hangi label hangi FTR kategoriye gider
-# kemer_takili burada YOK -- predict.py'de filtreleniyor
-# -------------------------------------------------------------------
 YOLO_CLASS_TO_TESPIT = {
     **{label: ("sofor_eylemi", label) for label in VALID_DRIVER_ACTIONS},
     **{label: ("nesneler", label) for label in VALID_OBJECTS},
@@ -83,25 +67,23 @@ TURKISH_CHAR_MAP = str.maketrans({
     "C": "c", "G": "g", "I": "i", "O": "o", "S": "s", "U": "u",
 })
 
-
 def normalize_plate(plate: str) -> str:
     return re.sub(r"\s+", "", plate.strip().upper())
-
 
 def is_valid_plate(plate: str) -> bool:
     normalized = normalize_plate(plate)
     return bool(PLATE_REGEX.match(normalized))
 
-
 def setup_logging():
-    loguru_logger.remove()
-    loguru_logger.add(
-        sys.stdout,
-        format="<level>{time:YYYY-MM-DD HH:mm:ss}</level> | <level>{level: <8}</level> | {message}",
-        level="INFO"
-    )
-    return loguru_logger
-
+    if loguru_logger:
+        loguru_logger.remove()
+        loguru_logger.add(
+            sys.stdout,
+            format="<level>{time:YYYY-MM-DD HH:mm:ss}</level> | <level>{level: <8}</level> | {message}",
+            level="INFO"
+        )
+        return loguru_logger
+    return None
 
 def get_video_info(video_path: str) -> dict:
     cap = cv2.VideoCapture(video_path)
@@ -116,19 +98,15 @@ def get_video_info(video_path: str) -> dict:
     cap.release()
     return info
 
-
 def preprocess_frame(frame):
     return frame
-
 
 def get_time_from_frame(frame_idx: int, fps: float) -> float:
     if fps <= 0:
         fps = 30.0
     return round(frame_idx / fps, 1)
 
-
 def ensure_ascii_safe(value: Any) -> Any:
-    """Tum string degerlerini ASCII-safe yapar"""
     if isinstance(value, dict):
         return {ensure_ascii_safe(k): ensure_ascii_safe(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -144,7 +122,6 @@ def ensure_ascii_safe(value: Any) -> Any:
             return cleaned.lower()
         return cleaned
     return value
-
 
 def validate_output_schema(output: dict) -> tuple[bool, list[str]]:
     errors = []
@@ -165,7 +142,6 @@ def validate_output_schema(output: dict) -> tuple[bool, list[str]]:
         if tespit.get("kategori") not in VALID_CATEGORIES:
             errors.append(f"tespitler[{idx}].kategori gecersiz")
     return len(errors) == 0, errors
-
 
 def merge_consecutive_detections(
     tespitler: list[dict],
@@ -189,10 +165,8 @@ def merge_consecutive_detections(
         merged.append(current.copy())
     return merged
 
-
 def format_final_output(output: dict) -> dict:
     return ensure_ascii_safe(output)
-
 
 def format_output_json(predictions: dict, video_filename: str) -> dict:
     vehicle_type = predictions.get("vehicle_type", "")
