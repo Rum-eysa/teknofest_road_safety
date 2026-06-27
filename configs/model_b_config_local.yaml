@@ -1,0 +1,99 @@
+# Yerel gelistirme icin Model B config
+# Kullanim: python train.py --config configs/model_b_config_local.yaml
+
+meta:
+  model_id: "model_b"
+  description: "Model B (tespitler)"
+
+dataset:
+  path: "data/input/tespitler"
+  train_split: 0.70
+  val_split: 0.20
+  test_split: 0.10
+  classes:
+    - "arkaya_bakma"
+    - "esneme"
+    - "sigara_icme"
+    - "su_icme"
+    - "telefonla_konusma"
+    - "slalom"
+    - "etrafa_bakinma"
+    - "emniyet_kemeri_ihlali"
+    - "teknocan"
+    - "bilgisayar"
+    - "arka_koltuk_1"
+    - "arka_koltuk_2"
+    - "on_koltuk"
+  augmentation:
+    hsv_augment:
+      h_gain: 0.015
+      s_gain: 0.7
+      v_gain: 0.4
+    geometric:
+      degrees: 15
+      translate: 0.1
+      scale: [0.5, 1.5]
+      perspective: 0.0
+      flipud: 0.0
+      fliplr: 0.5
+    mosaic:
+      enabled: true
+      prob: 1.0
+    mixup:
+      enabled: true
+      prob: 0.2
+      alpha: 8.0
+
+model:
+  architecture: "yolov8n"
+  pretrained: true
+  backbone: "coco"
+  task: "detect"
+  single_cls: false
+
+training:
+  epochs: 150
+  patience: 15
+  batch_size: 16
+  gradient_accumulation: 1
+  imgsz: 640
+  optimizer: "SGD"
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  scheduler: "linear"
+  warmup_epochs: 3.0
+  warmup_momentum: 0.8
+  cls_pw: 1.0
+  obj_pw: 1.0
+  iou_pw: 1.5
+
+inference:
+  save_period: 5
+  val_period: 1
+  nms_conf_threshold: 0.25
+  nms_iou_threshold: 0.45
+  max_det: 30
+
+hardware:
+  device: "0"
+  amp: true
+  cache_images: false
+  workers: 4
+  pin_memory: true
+  max_training_time_seconds: 18000
+
+output:
+  project: "output/model_b"
+  name: "experiment"
+  save_best: true
+  save_last: true
+  log_freq: 50
+  verbose: true
+
+debug:
+  visualize_training: true
+  save_predictions: false
+  test_on_validation: true
+  confidence_threshold: 0.5
