@@ -30,7 +30,6 @@ dataset:
     - "sigara_icme"
     - "su_icme"
     - "telefonla_konusma"
-    - "slalom"
     - "etrafa_bakinma"
     - "emniyet_kemeri_ihlali"
     - "teknocan"

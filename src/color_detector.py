@@ -1,48 +1,38 @@
 import cv2
 import numpy as np
 
-from src.utils import VALID_COLORS
-
-COLOR_TEMPLATES = {
-    "beyaz": {"h_range": (0, 180), "s_range": (0, 50), "v_range": (200, 255)},
-    "siyah": {"h_range": (0, 180), "s_range": (0, 255), "v_range": (0, 50)},
-    "gri": {"h_range": (0, 180), "s_range": (0, 50), "v_range": (80, 180)},
-    "kirmizi": {"h_range": (0, 10), "s_range": (100, 255), "v_range": (100, 255)},
-    "mavi": {"h_range": (100, 130), "s_range": (100, 255), "v_range": (100, 255)},
-    "sari": {"h_range": (20, 35), "s_range": (100, 255), "v_range": (100, 255)},
-    "yesil": {"h_range": (35, 85), "s_range": (100, 255), "v_range": (100, 255)},
-    "turuncu": {"h_range": (10, 20), "s_range": (100, 255), "v_range": (100, 255)},
-    "kahverengi": {"h_range": (10, 20), "s_range": (100, 255), "v_range": (50, 150)},
-}
-
-
 def detect_color(vehicle_roi) -> str:
     if vehicle_roi is None or vehicle_roi.size == 0:
         return ""
 
-    hsv = cv2.cvtColor(vehicle_roi, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-    median_h = float(np.median(h))
-    median_s = float(np.median(s))
-    median_v = float(np.median(v))
+    # Gövde ortasını al: lastik ve cam hariç tutulur
+    h, w = vehicle_roi.shape[:2]
+    roi = vehicle_roi[int(h*0.15):int(h*0.85), int(w*0.1):int(w*0.9)]
+    if roi.size == 0:
+        return ""
 
-    best_color = ""
-    best_score = -1.0
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    hsv = cv2.GaussianBlur(hsv, (5, 5), 0)
+    total = hsv.shape[0] * hsv.shape[1]
 
-    for color_name, ranges in COLOR_TEMPLATES.items():
-        h_min, h_max = ranges["h_range"]
-        s_min, s_max = ranges["s_range"]
-        v_min, v_max = ranges["v_range"]
+    COLOR_RANGES = {
+        "kirmizi":    [((0,50,50),(10,255,255)), ((160,50,50),(179,255,255))],
+        "turuncu":    [((10,100,100),(25,255,255))],
+        "sari":       [((25,80,80),(35,255,255))],
+        "yesil":      [((35,50,50),(85,255,255))],
+        "mavi":       [((85,50,50),(130,255,255))],
+        "beyaz":      [((0,0,180),(179,40,255))],
+        "siyah":      [((0,0,0),(179,255,50))],
+        "gri":        [((0,0,51),(179,50,179))],
+        "kahverengi": [((5,50,30),(20,200,160))],
+    }
 
-        h_ok = h_min <= median_h <= h_max
-        if color_name == "kirmizi" and median_h > 170:
-            h_ok = True
-        s_ok = s_min <= median_s <= s_max
-        v_ok = v_min <= median_v <= v_max
-        score = int(h_ok) + int(s_ok) + int(v_ok)
+    scores = {}
+    for color, ranges in COLOR_RANGES.items():
+        mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        for lo, hi in ranges:
+            mask = cv2.bitwise_or(mask, cv2.inRange(hsv, np.array(lo), np.array(hi)))
+        scores[color] = cv2.countNonZero(mask) / total
 
-        if score > best_score:
-            best_score = score
-            best_color = color_name
-
-    return best_color if best_color in VALID_COLORS else ""
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0.05 else "gri"

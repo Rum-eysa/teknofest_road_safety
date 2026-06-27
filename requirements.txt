@@ -11,3 +11,6 @@ torchvision>=0.15.0
 easyocr>=1.7.0
 scikit-image>=0.21.0
 scipy>=1.11.0
+
+paddlepaddle>=2.5.2
+paddleocr>=2.7.0
