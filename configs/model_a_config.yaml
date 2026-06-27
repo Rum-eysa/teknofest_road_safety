@@ -23,14 +23,14 @@ dataset:
 
   # Sınıflar (7 araç tipi + 1 plaka ROI)
   classes:
-    - "hatchback"
-    - "pickup"
-    - "sedan"
-    - "suv"
-    - "minibus"
-    - "panelvan"
-    - "kamyon"
-    - "plaka"
+    - hatchback
+    - kamyon
+    - minibus
+    - panelvan
+    - pickup
+    - plaka
+    - sedan
+    - suv
 
   # Augmentation (veri artırma) ayarları
   augmentation:

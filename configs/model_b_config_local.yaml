@@ -11,19 +11,19 @@ dataset:
   val_split: 0.20
   test_split: 0.10
   classes:
-    - "arkaya_bakma"
-    - "esneme"
-    - "sigara_icme"
-    - "su_icme"
-    - "telefonla_konusma"
-    - "slalom"
-    - "etrafa_bakinma"
-    - "emniyet_kemeri_ihlali"
-    - "teknocan"
-    - "bilgisayar"
-    - "arka_koltuk_1"
-    - "arka_koltuk_2"
-    - "on_koltuk"
+    - arka_koltuk_1
+    - arka_koltuk_2
+    - arkaya_bakma
+    - bilgisayar
+    - emniyet_kemeri_ihlali
+    - esneme
+    - etrafa_bakinma
+    - kemer_takili
+    - on_koltuk
+    - sigara_icme
+    - su_icme
+    - teknocan
+    - telefonla_konusma
   augmentation:
     hsv_augment:
       h_gain: 0.015

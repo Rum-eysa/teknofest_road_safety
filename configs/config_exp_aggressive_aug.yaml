@@ -8,14 +8,14 @@ dataset:
   val_split: 0.20
   test_split: 0.10
   classes:
-    - "hatchback"
-    - "pickup"
-    - "sedan"
-    - "suv"
-    - "minibus"
-    - "panelvan"
-    - "kamyon"
-    - "plaka"
+    - hatchback
+    - kamyon
+    - minibus
+    - panelvan
+    - pickup
+    - plaka
+    - sedan
+    - suv
   augmentation:
     hsv_augment:
       h_gain: 0.03
