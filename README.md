@@ -22,7 +22,7 @@
 Model ağırlıklarını `models/best_model.pt` yoluna yerleştirin, ardından aşağıdaki komutları çalıştırın:
 
 ```bash
-docker build -t teknofest/road_safety:latest .
+docker build -t rumicim/road_safety:latest .
 docker run --rm --gpus all \
   -v /path/to/video.mp4:/app/data/input/video.mp4 \
   -v ./output:/app/data/output \
