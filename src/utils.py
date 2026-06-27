@@ -15,7 +15,7 @@ VALID_CATEGORIES = {"sofor_eylemi", "nesneler", "yolcular"}
 
 VALID_DRIVER_ACTIONS = {
     "arkaya_bakma", "esneme", "sigara_icme", "su_icme", "telefonla_konusma",
-    "slalom", "etrafa_bakinma", "emniyet_kemeri_ihlali",
+     "etrafa_bakinma", "emniyet_kemeri_ihlali",
 }
 VALID_OBJECTS = {"teknocan", "bilgisayar"}
 VALID_PASSENGERS = {"arka_koltuk_1", "arka_koltuk_2", "on_koltuk"}
@@ -26,7 +26,7 @@ MODEL_A_YOLO_CLASSES = [
 
 MODEL_B_YOLO_CLASSES = [
     "arkaya_bakma", "esneme", "sigara_icme", "su_icme", "telefonla_konusma",
-    "slalom", "etrafa_bakinma", "emniyet_kemeri_ihlali",
+     "etrafa_bakinma", "emniyet_kemeri_ihlali",
     "teknocan", "bilgisayar",
     "arka_koltuk_1", "arka_koltuk_2", "on_koltuk",
 ]
