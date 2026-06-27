@@ -10,7 +10,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.train
-    image: teknofest/model_a_train:latest
+    image: rumicim/road_safety:v1.0
     container_name: model_a_baseline
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
@@ -45,7 +45,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.train
-    image: teknofest/model_a_train:latest
+    image: rumicim/road_safety:v1.0
     container_name: model_a_exp_aggressive_aug
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
@@ -80,7 +80,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.train
-    image: teknofest/model_a_train:latest
+    image: rumicim/road_safety:v1.0
     container_name: model_a_exp_high_lr
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
@@ -117,7 +117,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.train
-    image: teknofest/model_a_train:latest
+    image: rumicim/road_safety:v1.0
     container_name: model_a_exp_large_batch
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
@@ -154,7 +154,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.train
-    image: teknofest/model_a_train:latest
+    image: rumicim/road_safety:v1.0
     container_name: model_a_exp_combined
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
