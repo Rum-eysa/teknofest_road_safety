@@ -1,0 +1,12 @@
+# requirements.txt — Model A (Arac Bilgisi) Egitim Ortami
+# NEDEN versiyon araliklari (>=) sabit pin (==) yerine?
+#   Ultralytics ve PyTorch hizla guncellenen kutuphanelerdir; cok siki pinleme
+#   (==) GPU surucu/CUDA uyumsuzluklarinda Docker build'inin kirilmasina yol
+#   acabilir. Alt sinir (>=) vererek minimum gerekli ozellik setini garanti
+#   ederken, yama (patch) guncellemelerine acik birakiyoruz.
+ultralytics>=8.2.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+pyyaml>=6.0
+loguru>=0.7.0
+tqdm>=4.60.0

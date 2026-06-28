@@ -1,0 +1,54 @@
+# =============================================================================
+# config.yaml — Cikarim (Inference) Pipeline Konfigurasyonu
+# -----------------------------------------------------------------------------
+# NEDEN bu degerler config.yaml'da, FTR Madde E'deki "ortam tespiti" ile
+# KARISTIRILMAMALIDIR?
+#   Burada tanimlanan degerler (yollar, esikler, sinif listeleri) UYGULAMA
+#   KONFIGURASYONUDUR; HANGI ortamda calistigini tespit edip DAVRANIS
+#   DEGISTIRMEK degildir. Bu dosya degismeden, ayni kod HER ortamda
+#   (lokal/Docker/degerlendirme sunucusu) AYNI girdi-cikti davranisini
+#   gosterir — sadece "nereden okuyup nereye yazacagini" bildirir.
+# =============================================================================
+
+yollar:
+  girdi_video: "/app/data/input/video.mp4"
+  cikti_json: "/app/data/output/results.json"
+  model_a_agirlik: "/app/models/best_model_a.pt"   # Arac Bilgisi
+  model_b_agirlik: "/app/models/best_model_b.pt"   # Yol Guvenligi Tespitleri
+
+cikarim:
+  kare_atlama: 1                  # 1 = her kare islenir; >1 hiz/dogruluk degisimi icin
+  guven_esigi_model_a: 0.40
+  guven_esigi_model_b: 0.35
+  plaka_ocr_min_guven: 0.30
+  plaka_sinif_adi: "plaka"        # Model A ciktisinda plaka bolgesini tanimlayan sinif adi
+
+siniflar:
+  arac_tipleri:
+    - hatchback
+    - pickup
+    - sedan
+    - suv
+    - minibus
+    - panelvan
+    - kamyon
+  sofor_eylemi:
+    - arkaya_bakma
+    - esneme
+    - sigara_icme
+    - su_icme
+    - telefonla_konusma
+    - etrafa_bakinma
+    - emniyet_kemeri_ihlali
+  nesneler:
+    - teknocan
+    - bilgisayar
+  yolcular:
+    - arka_koltuk_1
+    - arka_koltuk_2
+    - on_koltuk
+
+slalom:
+  pencere_kare_sayisi: 30          # ~1-2 sn'lik hareket penceresi (FPS'e bagli)
+  min_yon_degisimi: 3              # Slalom sayilmasi icin min. yon degisimi (zero-crossing)
+  min_genlik_piksel: 15.0          # Gurultu/titreme ile gercek salinimi ayiran esik

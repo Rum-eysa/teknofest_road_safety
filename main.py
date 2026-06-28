@@ -1,85 +1,80 @@
-#!/usr/bin/env python3
 """
-Teknofest Yol Guvenligi - inference entry point.
+main.py — Cikarim Pipeline Giris Noktasi
+=============================================================================
+FTR sartnamesinde verilen ornek mimariye (main.py, src/predict.py,
+src/utils.py) sadik kalinarak hazirlanmistir. Bu dosya, SADECE orkestrasyon
+yapar: konfigurasyonu okur, cikarimi baslatir, ciktiyi diske yazar.
+TUM is mantigi (model yukleme, OCR, renk tahmini, slalom) src/ altindaki
+modullere DELEGE edilmistir (bkz. src/predict.py, src/ocr_utils.py,
+src/color_utils.py, src/tracking.py, src/utils.py).
 
-Input : /app/data/input/video.mp4
-Output: /app/data/output/results.json
-Models: /app/models/best_a.pt, /app/models/best_b.pt
+NEDEN bu dosyada DEGERLENDIRME ORTAMI TESPITI YOKTUR (FTR Madde E)?
+    Asagidaki kodda hostname/IP/ortam degiskeni/dosya varligi kontrolune
+    dayanan TEK BIR if/else veya try/except YOKTUR. Tek try/except blogu,
+    cikarim SIRASINDA olusabilecek GERCEK calisma zamani hatalarini
+    (corrupt video, eksik agirlik dosyasi vb.) yakalamak icindir — bu,
+    standart hata yonetimi pratigidir, ortam tespiti DEGILDIR.
+=============================================================================
 """
 
-import json
 import os
 import sys
-import time
+import json
+import traceback
+
+import yaml
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from src.predict import run_inference
-from src.utils import ensure_ascii_safe, setup_logging, validate_output_schema
+from src.predict import cikarimi_calistir
+from src.utils import loglamayi_kur
 
-INPUT_VIDEO_PATH = "/app/data/input/video.mp4"
-OUTPUT_JSON_PATH = "/app/data/output/results.json"
-MODEL_A_WEIGHTS = "/app/models/best_a.pt"
-MODEL_B_WEIGHTS = "/app/models/best_b.pt"
-MAX_EXECUTION_TIME_SECONDS = 10 * 60
+
+def konfigurasyonu_yukle(config_yolu: str = "config.yaml") -> dict:
+    with open(config_yolu, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
 def main():
-    logger = setup_logging()
-    start_time = time.time()
+    logger = loglamayi_kur()
+    config = konfigurasyonu_yukle()
 
-    logger.info("=" * 70)
-    logger.info("Teknofest Yol Guvenligi - Inference Pipeline")
-    logger.info("=" * 70)
+    girdi_video = config["yollar"]["girdi_video"]
+    cikti_json = config["yollar"]["cikti_json"]
 
-    if not os.path.exists(INPUT_VIDEO_PATH):
-        logger.error(f"Input video bulunamadi: {INPUT_VIDEO_PATH}")
+    logger.info("=" * 78)
+    logger.info("TEKNOFEST 2026 — AKILLI YOL GUVENLIGI — CIKARIM (INFERENCE) PIPELINE'I")
+    logger.info("=" * 78)
+    logger.info(f"Girdi videosu      : {girdi_video}")
+    logger.info(f"Cikti JSON         : {cikti_json}")
+    logger.info(f"Model A agirligi   : {config['yollar']['model_a_agirlik']}")
+    logger.info(f"Model B agirligi   : {config['yollar']['model_b_agirlik']}")
+    logger.info("=" * 78)
+
+    if not os.path.exists(girdi_video):
+        logger.error(f"HATA: Girdi videosu bulunamadi -> {girdi_video}")
         sys.exit(1)
-
-    if not os.path.exists(MODEL_A_WEIGHTS):
-        logger.error(f"Model A agirligi bulunamadi: {MODEL_A_WEIGHTS}")
-        sys.exit(1)
-
-    if not os.path.exists(MODEL_B_WEIGHTS):
-        logger.error(f"Model B agirligi bulunamadi: {MODEL_B_WEIGHTS}")
-        sys.exit(1)
-
-    os.makedirs(os.path.dirname(OUTPUT_JSON_PATH), exist_ok=True)
 
     try:
-        output_data = run_inference(
-            video_path=INPUT_VIDEO_PATH,
-            model_a_weights=MODEL_A_WEIGHTS,
-            model_b_weights=MODEL_B_WEIGHTS,
-            timeout_seconds=MAX_EXECUTION_TIME_SECONDS - 30,
-            logger=logger,
-        )
+        cikti_verisi = cikarimi_calistir(girdi_video, config, logger)
 
-        is_valid, errors = validate_output_schema(output_data)
-        if not is_valid:
-            logger.error(f"Output schema hatasi: {errors}")
-            sys.exit(1)
+        cikti_dizini = os.path.dirname(cikti_json)
+        os.makedirs(cikti_dizini, exist_ok=True)
 
-        output_data = ensure_ascii_safe(output_data)
+        # NEDEN ensure_ascii=True (varsayilan)?
+        #   FTR Madde 3.6: "Turkce karakter kullanimindan KESINLIKLE
+        #   kacinilmalidir." JSON degerleri ZATEN ascii_guvenli_kucuk_harf
+        #   ile temizlenmis olsa da, ensure_ascii=True IKINCI bir guvenlik
+        #   katmani olarak, olasi kacak (escape edilmemis) bir Unicode
+        #   karakterin dosyaya yazilmasini ENGELLER.
+        with open(cikti_json, "w", encoding="utf-8") as f:
+            json.dump(cikti_verisi, f, ensure_ascii=True, indent=2)
 
-        with open(OUTPUT_JSON_PATH, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, ensure_ascii=False, indent=2)
+        logger.info(f"Islem basarili! Cikti kaydedildi: {cikti_json}")
+        logger.info("=" * 78)
 
-        elapsed = time.time() - start_time
-        logger.info(f"Inference tamamlandi ({elapsed:.1f}s)")
-        logger.info(f"Cikti: {OUTPUT_JSON_PATH}")
-        logger.info(f"Tespit sayisi: {len(output_data.get('tespitler', []))}")
-
-        if elapsed > MAX_EXECUTION_TIME_SECONDS:
-            logger.error("10 dakika timeout asildi")
-            sys.exit(1)
-
-    except TimeoutError as exc:
-        logger.error(f"Timeout: {exc}")
-        sys.exit(1)
-    except Exception as exc:
-        logger.error(f"Inference hatasi: {exc}")
-        import traceback
+    except Exception as e:
+        logger.error(f"HATA: {str(e)}")
         logger.error(traceback.format_exc())
         sys.exit(1)
 

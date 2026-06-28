@@ -1,0 +1,70 @@
+# =============================================================================
+# config.yaml — Model A (Arac Bilgisi) Egitim Konfigurasyonu
+# -----------------------------------------------------------------------------
+# NEDEN config.yaml?
+#   5 kisilik ekibin ayni kod tabanini farkli hiperparametre kombinasyonlariyla
+#   (batch size, learning rate, optimizer, augmentation) calistirabilmesi icin
+#   tum degerler train.py icine GOMULU (hardcoded) DEGIL, bu dosyadan okunur.
+#   Boylece:
+#     1) Kod degismez, sadece bu dosya kopyalanip degistirilir (deney izlenebilirligi)
+#     2) Komite kod incelemesinde "tek bir kaynaktan yonetilen, parametrik"
+#        bir mimari oldugu acikca gorulur
+#     3) Her ekip uyesi kendi config_<isim>.yaml dosyasini olusturup
+#        --config bayragiyla calistirabilir
+# =============================================================================
+
+model:
+  # NEDEN yolov8m (medium)?
+  #   Roboflow setindeki ~7500 gorsel ve 5 saatlik sabit egitim suresi dusunuldugunde
+  #   "n/s" modelleri kapasite acisindan sinirli kalirken "l/x" modelleri 5 saatlik
+  #   butce icinde yakinsamayi riske atar. "m" modeli, dogruluk/hiz dengesini
+  #   yarisma kosullarina en uygun sekilde saglar.
+  architecture: "yolov8m.pt"     # onceden egitilmis (pretrained) taban agirlik
+  num_classes: 8                  # 7 arac tipi + 1 "plaka" bolge sinifi
+  img_size: 640                   # YOLO standart giris cozunurlugu
+
+dataset:
+  # Roboflow'dan "YOLOv8" formatinda export edilen veri setinin data.yaml yolu.
+  # Bu repo icinde sablon olarak data/data.yaml saglanmistir; gercek yol takim
+  # tarafindan Roboflow export'u indirildikten sonra guncellenmelidir.
+  data_yaml: "data/data.yaml"
+
+train:
+  # NEDEN epochs=300 (sabit/hardcoded DEGIL, UST SINIR)?
+  #   FTR sartina gore kesin sure kisidi 5 saattir, epoch sayisi degil. Bu yuzden
+  #   epochs burada sadece bir "guvenlik tavani"dir; gercek durdurma kosulu
+  #   early_stopping (patience) ve zaman butcesi (time_budget) tarafindan kontrol edilir.
+  epochs: 300
+  batch_size: 16                  # --batch_size ile CLI'dan override edilebilir
+  learning_rate: 0.01             # --lr ile CLI'dan override edilebilir
+  optimizer: "SGD"                # "SGD" | "AdamW" — --optimizer ile override edilebilir
+  patience: 15                    # FTR sarti: early stopping sabri (epoch)
+  amp: true                       # FTR sarti: Automatic Mixed Precision (hiz/VRAM optimizasyonu)
+  workers: 8                      # DataLoader worker sayisi (lokal/Colab donanimina gore ayarlanir)
+  device: 0                       # GPU index ("cpu" da yazilabilir, fallback icin)
+  seed: 42                        # Tum ekip ayni baslangic kosulundan karsilastirma yapabilsin diye sabit
+
+augmentation:
+  # NEDEN mosaic + mixup?
+  #   Arac tespiti genis acili/genel kamera goruntusunde, degisken olcek ve
+  #   kismi oklüzyon (orten nesneler) ile karsilasir. Mosaic, kucuk/orta olcekli
+  #   araclarin tespitini guclendirirken; mixup, modelin asiri ezberlemesini
+  #   (overfitting) 5 saatlik kisa egitimde bile azaltir.
+  mosaic: 1.0
+  mixup: 0.15
+  hsv_h: 0.015                    # Renk tonu (hue) — hava/aydinlatma farklarina karsi dayaniklilik
+  hsv_s: 0.7                      # Doygunluk (saturation)
+  hsv_v: 0.4                      # Parlaklik (value) — farkli saat/gun isigi senaryolari icin
+  degrees: 0.0                    # Donme — arac/yol goruntulerinde asiri donme gercekci degil
+  translate: 0.1
+  scale: 0.5
+  fliplr: 0.5                     # Yatay ayna — yol sahnelerinde gecerli, dikey (flipud) KAPALI
+
+time_budget:
+  # FTR Madde D: "5 saatlik sabit egitim butcesi" — guvenlik payi ile 4 saat 45 dakika.
+  # 17100 sn = 4*3600 + 45*60. train.py bu degeri okuyup epoch sonu kontrolu yapar.
+  max_seconds: 17100
+
+output:
+  project_dir: "runs/model_a"
+  run_name: "arac_bilgisi_v1"     # --run_name ile her deneme icin benzersiz isim verilmeli

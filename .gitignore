@@ -36,21 +36,28 @@ env/
 .DS_Store
 Thumbs.db
 
-# Project specific
-models/
-weights/
-output/
+# Model agirliklari (buyuk dosyalar, repoya commitlenmez)
+*.pt
+*.pth
+*.onnx
 runs/
 logs/
+training/model_a_egitim/datasets/
+datasets/
+
+# Test videolari ve uretilen ciktilar
 *.mp4
 *.avi
 *.mov
+data/output/*.json
+
+# Notebook checkpoint
+.ipynb_checkpoints/
+
+# Sikistirilmis arsivler
+*.zip
 
 # Temp files
 *.tmp
 *.bak
 *.log
-bool
-dict
-str
-data/

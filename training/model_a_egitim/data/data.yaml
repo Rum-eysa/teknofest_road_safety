@@ -1,0 +1,14 @@
+train: /content/datasets/arac_bilgisi/train/images
+val:   /content/datasets/arac_bilgisi/valid/images
+test:  /content/datasets/arac_bilgisi/test/images
+
+nc: 8
+names:
+  0: hatchback
+  1: pickup
+  2: sedan
+  3: suv
+  4: minibus
+  5: panelvan
+  6: kamyon
+  7: plaka

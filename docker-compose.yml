@@ -1,186 +1,35 @@
-# Model A egitim denemeleri icin docker-compose
-#
-# Kullanim:
-#   docker compose up baseline --build
-#   docker compose up exp_high_lr --build
-#   docker compose logs -f baseline
-
+# =============================================================================
+# docker-compose.yml — Cikarim (Inference) Pipeline
+# -----------------------------------------------------------------------------
+# NEDEN volume yollari /app/data/input ve /app/data/output ile BIREBIR eslesir?
+#   FTR sartnamesi, girdi/cikti yollarini SABIT olarak tanimlar
+#   (/app/data/input/video.mp4, /app/data/output/results.json). Bu volume
+#   eslemeleri, host makinedeki GERCEK video dosyasini konteyner icindeki
+#   BEKLENEN yola, kod DEGISTIRILMEDEN baglar.
+# =============================================================================
 services:
-  baseline:
+  cikarim:
     build:
       context: .
-      dockerfile: Dockerfile.train
-    image: rumicim/road_safety:v1.0
-    container_name: model_a_baseline
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=0
-      - CUDA_VISIBLE_DEVICES=0
-    volumes:
-      - ./data/arac_bilgisi:/data/arac_bilgisi:ro
-      - ./output/experiment_baseline:/output
-      - ./logs/experiment_baseline:/app/logs
-    deploy:
-      resources:
-        limits:
-          memory: 14G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    working_dir: /app
-    command:
-      - python3
-      - /app/train.py
-      - --config
-      - /app/configs/model_a_config.yaml
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "5"
-    restart: "no"
+      dockerfile: Dockerfile
+    image: teknofest/road_safety_inference:latest
+    container_name: road_safety_inference
 
-  exp_aggressive_aug:
-    build:
-      context: .
-      dockerfile: Dockerfile.train
-    image: rumicim/road_safety:v1.0
-    container_name: model_a_exp_aggressive_aug
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=0
-      - CUDA_VISIBLE_DEVICES=0
-    volumes:
-      - ./data/arac_bilgisi:/data/arac_bilgisi:ro
-      - ./output/experiment_aggressive_aug:/output
-      - ./logs/experiment_aggressive_aug:/app/logs
     deploy:
       resources:
-        limits:
-          memory: 14G
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
-    working_dir: /app
-    command:
-      - python3
-      - /app/train.py
-      - --config
-      - /app/configs/config_exp_aggressive_aug.yaml
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "5"
-    restart: "no"
 
-  exp_high_lr:
-    build:
-      context: .
-      dockerfile: Dockerfile.train
-    image: rumicim/road_safety:v1.0
-    container_name: model_a_exp_high_lr
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=0
-      - CUDA_VISIBLE_DEVICES=0
     volumes:
-      - ./data/arac_bilgisi:/data/arac_bilgisi:ro
-      - ./output/experiment_high_lr:/output
-      - ./logs/experiment_high_lr:/app/logs
-    deploy:
-      resources:
-        limits:
-          memory: 14G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    working_dir: /app
-    command:
-      - python3
-      - /app/train.py
-      - --config
-      - /app/configs/model_a_config.yaml
-      - --lr
-      - "0.02"
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "5"
-    restart: "no"
-
-  exp_large_batch:
-    build:
-      context: .
-      dockerfile: Dockerfile.train
-    image: rumicim/road_safety:v1.0
-    container_name: model_a_exp_large_batch
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=0
-      - CUDA_VISIBLE_DEVICES=0
-    volumes:
-      - ./data/arac_bilgisi:/data/arac_bilgisi:ro
-      - ./output/experiment_large_batch:/output
-      - ./logs/experiment_large_batch:/app/logs
-    deploy:
-      resources:
-        limits:
-          memory: 14G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    working_dir: /app
-    command:
-      - python3
-      - /app/train.py
-      - --config
-      - /app/configs/model_a_config.yaml
-      - --batch-size
-      - "48"
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "5"
-    restart: "no"
-
-  exp_combined:
-    build:
-      context: .
-      dockerfile: Dockerfile.train
-    image: rumicim/road_safety:v1.0
-    container_name: model_a_exp_combined
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=0
-      - CUDA_VISIBLE_DEVICES=0
-    volumes:
-      - ./data/arac_bilgisi:/data/arac_bilgisi:ro
-      - ./output/experiment_combined:/output
-      - ./logs/experiment_combined:/app/logs
-    deploy:
-      resources:
-        limits:
-          memory: 14G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    working_dir: /app
-    command:
-      - python3
-      - /app/train.py
-      - --config
-      - /app/configs/config_exp_combined.yaml
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "5"
-    restart: "no"
+      # Host'taki test videosu, konteyner icinde FTR'nin BEKLEDIGI sabit
+      # yola SALT-OKUNUR (read-only) olarak baglanir.
+      - ./data/input/video.mp4:/app/data/input/video.mp4:ro
+      # Cikti JSON'u host'a yazilir ki konteyner kapandiktan sonra da erisilebilsin.
+      - ./data/output:/app/data/output
+      # Egitilmis agirliklar (Model A + Model B), imaj YENIDEN BUILD
+      # EDILMEDEN guncellenebilsin diye volume olarak da baglanabilir
+      # (isteniyorsa COPY yerine bu satir aktif edilebilir).
+      - ./models:/app/models:ro

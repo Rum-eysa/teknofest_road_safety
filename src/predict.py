@@ -1,274 +1,317 @@
-# -*- coding: utf-8 -*-
 """
-src/predict.py — Ana Inference Pipeline
+src/predict.py — Cikarim (Inference) Orkestrasyonu
+=============================================================================
+Bu modul, FTR Madde 3 (CIKTI 3) altinda istenen tum cikarim akisini
+yonetir: video okuma, Model A (Arac Bilgisi) ve Model B (Yol Guvenligi)
+cikarimlarini BIRLIKTE calistirma, plaka OCR'i, renk tahmini, slalom
+tespiti ve son olarak konsolide JSON semasinin olusturulmasi.
 
-Her video frame'inde iki model paralel çalışır:
-  Model A → araç tipi + plaka bbox (+ OCR) + renk (HSV)
-  Model B → sürücü eylemi / yolcu / nesne
-  Trajectory → slalom (konum bazlı, model gerektirmez)
-
-Tüm sonuçlar tek bir JSON'da birleşir.
+NEDEN bu kadar fonksiyon TEK dosyada degil, kucuk parcalara bolundu?
+    Her bir alt-gorev (OCR, renk, takip) kendi modulunde (ocr_utils,
+    color_utils, tracking) yer alir; bu dosya SADECE bu modulleri
+    ORKESTRE EDER. Bu ayrim, yarisma komitesinin her bir bilesimi BAGIMSIZ
+    olarak inceleyebilmesini ve ekip uyelerinin farkli modullerde AYNI ANDA
+    (cakismadan) calisabilmesini saglar.
+=============================================================================
 """
+
 import os
-import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
-from typing import Any
 
 import cv2
-import torch
-from ultralytics import YOLO
 
-from src.color_detector import detect_color
-from src.ocr_handler import extract_and_validate_plate
-from src.trajectory_analyzer import TrajectoryAnalyzer
-from src.utils import (
-    MODEL_A_YOLO_CLASSES,
-    MODEL_B_YOLO_CLASSES,
-    YOLO_CLASS_TO_TESPIT,
-    format_final_output,
-    get_time_from_frame,
-    merge_consecutive_detections,
-    preprocess_frame,
-)
-
-# JSON'a yazılmayacak labellar:
-#   kemer_takili → eğitimde kontrast sağlar, FTR'de tanımsız
-#   slalom       → trajectory'den geliyor, Model B'den gelmemeli
-INFERENCE_SKIP_LABELS = {"kemer_takili", "slalom"}
-
-# Slalom cooldown: aynı slalomu kaç saniyede bir raporla
-SLALOM_COOLDOWN_SEC = 5.0
+from src.utils import video_bilgisini_oku, cikti_semasini_olustur
+from src.color_utils import arac_rengini_tahmin_et
+from src.ocr_utils import plaka_bolgesini_oku
+from src.tracking import SlalomDedektoru
 
 
-class InferenceExecutor:
-    def __init__(
-        self,
-        model_a_weights: str,
-        model_b_weights: str,
-        device: str = "0",
-        logger=None,
-    ):
-        self.logger = logger
-        self.device = device
-        self.model_a = YOLO(model_a_weights)
-        self.model_b = YOLO(model_b_weights)
+def modelleri_yukle(model_a_yolu: str, model_b_yolu: str, logger):
+    """Model A (Arac Bilgisi) ve Model B (Yol Guvenligi) agirliklarini yukler.
 
-        if logger:
-            logger.info(f"Model A yuklendi: {model_a_weights}")
-            logger.info(f"Model B yuklendi: {model_b_weights}")
+    NEDEN her iki model BASLANGICTA (video isleme dongusunden ONCE) yuklenir?
+        Model yukleme (agirlik dosyasini diskten okuma + GPU'ya tasima),
+        her kare icin TEKRARLANIRSA performansi feci sekilde dusurur. Modeller
+        BIR KEZ yuklenip, video boyunca TEKRAR KULLANILIR (bellekte tutulur).
+    """
+    from ultralytics import YOLO
 
-        self.stats = {
-            "total_frames": 0,
-            "vehicle_detected_frames": 0,
-            "safety_events": 0,
-        }
+    if not os.path.exists(model_a_yolu):
+        raise FileNotFoundError(f"Model A agirligi bulunamadi: {model_a_yolu}")
+    if not os.path.exists(model_b_yolu):
+        raise FileNotFoundError(f"Model B agirligi bulunamadi: {model_b_yolu}")
 
-    def process_video(
-        self, video_path: str, timeout_seconds: float = 570
-    ) -> dict[str, Any]:
+    logger.info(f"Model A yukleniyor (Arac Bilgisi): {model_a_yolu}")
+    model_a = YOLO(model_a_yolu)
 
-        start_time = time.time()
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise RuntimeError(f"Video acilamadi: {video_path}")
+    logger.info(f"Model B yukleniyor (Yol Guvenligi): {model_b_yolu}")
+    model_b = YOLO(model_b_yolu)
 
-        fps        = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        video_name = os.path.basename(video_path)
+    return model_a, model_b
 
-        if self.logger:
-            total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            self.logger.info(f"Video: {video_name} | FPS:{fps:.1f} | Kare:{total_f}")
 
-        frame_idx  = 0
-        tespitler  = []
+def _karede_model_calistir(model, kare, guven_esigi: float):
+    """Tek bir YOLO modelini tek bir karede calistirir ve ham sonucu doner.
 
-        # Majority voting için biriktirme
-        vehicle_type_votes = []   # [(tip, conf), ...]
-        plate_reads        = []   # [(plaka_str, conf), ...]
-        color_reads        = []   # [renk_str, ...]
+    NEDEN ayri, kucuk bir fonksiyon?
+        ThreadPoolExecutor.submit() bu fonksiyonu Model A ve Model B icin
+        PARALEL olarak cagirir (bkz. _frame_cikarimi_yap). Fonksiyonun
+        yalitilmis (isolated) olmasi, thread-safety acisindan ONEMLIDIR:
+        her cagri kendi yerel degiskenleriyle calisir, PAYLASILAN durum
+        (shared state) YOKTUR.
+    """
+    sonuc = model.predict(kare, conf=guven_esigi, verbose=False)
+    return sonuc[0] if sonuc else None
 
-        # Slalom takibi
-        trajectory   = TrajectoryAnalyzer(window_size=30, logger=self.logger)
-        last_slalom_t = -SLALOM_COOLDOWN_SEC  # cooldown başlangıcı
 
-        try:
-            while True:
-                # Timeout kontrolü
-                if time.time() - start_time > timeout_seconds:
-                    if self.logger:
-                        self.logger.warning("Inference timeout ulasildi")
-                    break
+def _frame_cikarimi_yap(model_a, model_b, kare, config: dict) -> tuple:
+    """Model A VE Model B'yi AYNI kare uzerinde ESZAMANLI (concurrent) calistirir.
 
-                ret, frame = cap.read()
-                if not ret:
-                    break
+    NEDEN ThreadPoolExecutor (multiprocessing DEGIL)?
+        Her iki model de AYNI GPU belleginde (CUDA context) yasar; ayri
+        PROCESS'lere bolmek (multiprocessing) modelleri HER PROCESS'TE
+        TEKRAR yuklemeyi gerektirir ve GPU bellek cakismasi riski yaratir.
+        Thread tabanli yaklasimda ise PyTorch'un CUDA kernel cagrilari
+        GIL'i (Global Interpreter Lock) BIRAKTIGI icin, iki modelin GPU
+        uzerindeki hesaplamalari GERCEKTEN orusebilir (overlap); bu da
+        Madde 3.3'teki "asenkron/ardisik calistirma" sartini, ek surec
+        karmasikligi olmadan karsilar.
 
-                # Her 5. kareyi işle — T4'te 10dk timeout için kritik
-                # 30fps → efektif 6fps, tespit için yeterli
-                if frame_idx % 5 != 0:
-                    frame_idx += 1
-                    continue
+    NEDEN bu fonksiyon hata durumunda istisna FIRLATIYOR (yutmuyor)?
+        Bir karede cikarim hatasi, sessizce yutulup video isleme devam
+        ederse, yanlislikla EKSIK/HATALI bir JSON ciktisi uretilebilir.
+        Hata, main.py'deki TEK merkezi try/except blogunda ele alinir.
+    """
+    with ThreadPoolExecutor(max_workers=2) as havuz:
+        gelecek_a = havuz.submit(
+            _karede_model_calistir, model_a, kare, config["cikarim"]["guven_esigi_model_a"]
+        )
+        gelecek_b = havuz.submit(
+            _karede_model_calistir, model_b, kare, config["cikarim"]["guven_esigi_model_b"]
+        )
+        sonuc_a = gelecek_a.result()
+        sonuc_b = gelecek_b.result()
 
-                time_seconds = get_time_from_frame(frame_idx, fps)
-                frame_input  = preprocess_frame(frame)
+    return sonuc_a, sonuc_b
 
-                with torch.no_grad():
-                    results_a = self.model_a(
-                        frame_input, conf=0.25, verbose=False, device=self.device
-                    )
-                    results_b = self.model_b(
-                        frame_input, conf=0.30, verbose=False, device=self.device
-                    )
 
-                # ── MODEL A: Araç tipi + Plaka + Renk ───────────────────
-                if len(results_a[0].boxes) > 0:
-                    self.stats["vehicle_detected_frames"] += 1
-                    boxes    = results_a[0].boxes
-                    best_idx = int(torch.argmax(boxes.conf).item())
-                    best_box = boxes[best_idx]
+def _model_a_sonucunu_isle(sonuc_a, kare, config: dict) -> dict:
+    """Model A ciktisindan EN YUKSEK guvenli arac kutusunu, plaka crop'unu ve renk tahminini cikarir.
 
-                    x1, y1, x2, y2 = map(int, best_box.xyxy[0].tolist())
-                    class_id     = int(best_box.cls.item())
-                    vehicle_conf = float(best_box.conf.item())
-                    raw_label    = MODEL_A_YOLO_CLASSES[class_id % len(MODEL_A_YOLO_CLASSES)]
+    NEDEN "EN YUKSEK guvenli TEK arac" varsayimi yapildi?
+        Yarisma senaryosu (slalom parkuru, plaka okuma istasyonu), TEK bir
+        TEST aracinin degerlendirildigi bir kurguya dayanir. Sahnede
+        BIRDEN FAZLA arac olsa da, FTR ciktisi TEK bir 'arac_bilgisi'
+        alani ister; bu yuzden HER karede EN YUKSEK guven skoruna sahip
+        arac, "ilgilenilen arac" (ego-vehicle) olarak secilir. Coklu-arac
+        takibi (multi-object tracking + ID atama) gerektiren bir senaryoya
+        genisletmek icin, bu fonksiyon ve SlalomDedektoru'nun arac ID'sine
+        gore COKLU ornek tutacak sekilde uyarlanmasi yeterlidir.
+    """
+    bos_sonuc = {"arac_kutusu": None, "arac_tipi": "", "arac_tipi_guven": 0.0,
+                 "merkez_x": None, "plaka_metni": "", "plaka_guven": 0.0,
+                 "renk": "", "renk_guven": 0.0}
 
-                    # "plaka" class'ı araç tipi değil — sadece OCR için kullan
-                    if raw_label != "plaka":
-                        vehicle_type_votes.append((raw_label, vehicle_conf))
+    if sonuc_a is None or sonuc_a.boxes is None or len(sonuc_a.boxes) == 0:
+        return bos_sonuc
 
-                    # Araç bölgesini crop et
-                    h_frame, w_frame = frame.shape[:2]
-                    x1c = max(0, x1); y1c = max(0, y1)
-                    x2c = min(w_frame, x2); y2c = min(h_frame, y2)
-                    vehicle_roi = frame[y1c:y2c, x1c:x2c]
+    sinif_isimleri = sonuc_a.names
+    plaka_sinif_adi = config["cikarim"]["plaka_sinif_adi"]
 
-                    # Renk tespiti (HSV histogram)
-                    color = detect_color(vehicle_roi)
-                    if color:
-                        color_reads.append(color)
+    en_iyi_arac_kutusu = None
+    en_iyi_arac_guven = -1.0
+    plaka_kutusu = None
+    plaka_guven_skoru = 0.0
 
-                    # Plaka OCR (Model A'nın "plaka" class bbox'ını kullanır)
-                    plate = extract_and_validate_plate(
-                        frame, vehicle_roi, results_a[0], logger=self.logger
-                    )
-                    if plate:
-                        plate_reads.append((plate, vehicle_conf))
+    for kutu in sonuc_a.boxes:
+        sinif_id = int(kutu.cls[0])
+        sinif_adi = sinif_isimleri.get(sinif_id, "")
+        guven = float(kutu.conf[0])
 
-                    # Slalom için araç merkezini güncelle
-                    center_x = (x1 + x2) / 2
-                    trajectory.update(center_x)
-
-                # ── MODEL B: Sürücü eylemi / Yolcu / Nesne ──────────────
-                if len(results_b[0].boxes) > 0:
-                    for box in results_b[0].boxes:
-                        class_id = int(box.cls.item())
-                        conf     = float(box.conf.item())
-
-                        if class_id >= len(MODEL_B_YOLO_CLASSES):
-                            continue
-
-                        label = MODEL_B_YOLO_CLASSES[class_id]
-
-                        # kemer_takili ve slalom JSON'a yazılmaz
-                        if label in INFERENCE_SKIP_LABELS:
-                            continue
-
-                        if label not in YOLO_CLASS_TO_TESPIT:
-                            continue
-
-                        kategori, etiket = YOLO_CLASS_TO_TESPIT[label]
-                        tespitler.append({
-                            "zaman_saniye":   time_seconds,
-                            "kategori":       kategori,
-                            "etiket":         etiket,
-                            "confidence_score": round(min(conf, 1.0), 2),
-                        })
-                        self.stats["safety_events"] += 1
-
-                # ── SLALOM: Trajectory analizi ───────────────────────────
-                is_slalom, slalom_conf = trajectory.detect_slalom()
-                if is_slalom and (time_seconds - last_slalom_t) >= SLALOM_COOLDOWN_SEC:
-                    tespitler.append({
-                        "zaman_saniye":   time_seconds,
-                        "kategori":       "sofor_eylemi",
-                        "etiket":         "slalom",
-                        "confidence_score": round(slalom_conf, 2),
-                    })
-                    last_slalom_t = time_seconds
-                    self.stats["safety_events"] += 1
-
-                self.stats["total_frames"] = frame_idx
-                frame_idx += 1
-
-        finally:
-            cap.release()
-
-        elapsed = time.time() - start_time
-        if self.logger:
-            self.logger.info(
-                f"Video islendi | Sure:{elapsed:.1f}s | "
-                f"Islem:{self.stats['total_frames']} kare | "
-                f"Tespit:{self.stats['safety_events']} olay"
-            )
-
-        # ── MAJORITY VOTING: Tüm video için en güvenilir arac_bilgisi ───
-        # Araç tipi: en çok görülen kazanır
-        if vehicle_type_votes:
-            label_counts = Counter(l for l, _ in vehicle_type_votes)
-            best_tip     = label_counts.most_common(1)[0][0]
-            tip_confs    = [c for l, c in vehicle_type_votes if l == best_tip]
-            tip_conf     = round(sum(tip_confs) / len(tip_confs), 2)
+        if sinif_adi == plaka_sinif_adi:
+            if guven > plaka_guven_skoru:
+                plaka_kutusu = kutu
+                plaka_guven_skoru = guven
         else:
-            best_tip, tip_conf = "", 0.0
+            if guven > en_iyi_arac_guven:
+                en_iyi_arac_kutusu = kutu
+                en_iyi_arac_guven = guven
 
-        # Plaka: en yüksek confidence'lı okuma kazanır
-        if plate_reads:
-            best_plaka, plaka_conf = max(plate_reads, key=lambda x: x[1])
-            plaka_conf = round(plaka_conf, 2)
+    sonuc = dict(bos_sonuc)
+
+    if en_iyi_arac_kutusu is not None:
+        x1, y1, x2, y2 = map(int, en_iyi_arac_kutusu.xyxy[0])
+        arac_crop = kare[max(0, y1):y2, max(0, x1):x2]
+
+        sonuc["arac_tipi"] = sinif_isimleri.get(int(en_iyi_arac_kutusu.cls[0]), "")
+        sonuc["arac_tipi_guven"] = en_iyi_arac_guven
+        sonuc["merkez_x"] = (x1 + x2) / 2.0
+
+        renk, renk_guven = arac_rengini_tahmin_et(arac_crop)
+        sonuc["renk"] = renk
+        sonuc["renk_guven"] = renk_guven
+
+    if plaka_kutusu is not None and plaka_guven_skoru >= config["cikarim"]["plaka_ocr_min_guven"]:
+        px1, py1, px2, py2 = map(int, plaka_kutusu.xyxy[0])
+        plaka_crop = kare[max(0, py1):py2, max(0, px1):px2]
+        plaka_metni, ocr_guven = plaka_bolgesini_oku(plaka_crop)
+        sonuc["plaka_metni"] = plaka_metni
+        # NEDEN tespit guveni VE OCR guveni CARPILIYOR (toplanmiyor)?
+        #   Plaka bilgisinin GUVENILIR sayilmasi icin HEM bolgenin DOGRU
+        #   tespit edilmis OLMASI HEM DE metnin DOGRU okunmus OLMASI
+        #   gerekir; bu iki BAGIMSIZ olasiligin BIRLESIK guveni, CARPIM
+        #   ile (olasilik teorisindeki bagimsiz olaylar gibi) ifade edilir.
+        sonuc["plaka_guven"] = round(plaka_guven_skoru * ocr_guven, 4)
+
+    return sonuc
+
+
+def _model_b_sonucunu_isle(sonuc_b, zaman_saniye: float, config: dict) -> list:
+    """Model B ciktisindaki HER tespiti, FTR'nin tespit semasina (kategori/etiket) esler."""
+    tespitler = []
+    if sonuc_b is None or sonuc_b.boxes is None or len(sonuc_b.boxes) == 0:
+        return tespitler
+
+    sinif_isimleri = sonuc_b.names
+    siniflar = config["siniflar"]
+
+    for kutu in sonuc_b.boxes:
+        sinif_adi = sinif_isimleri.get(int(kutu.cls[0]), "")
+        guven = float(kutu.conf[0])
+
+        if sinif_adi in siniflar["sofor_eylemi"]:
+            kategori = "sofor_eylemi"
+        elif sinif_adi in siniflar["nesneler"]:
+            kategori = "nesneler"
+        elif sinif_adi in siniflar["yolcular"]:
+            kategori = "yolcular"
         else:
-            best_plaka, plaka_conf = "", 0.0
+            continue  # Taninmayan/ilgisiz sinif -> atla
 
-        # Renk: en çok görülen kazanır
-        best_renk = Counter(color_reads).most_common(1)[0][0] if color_reads else ""
-
-        # Genel confidence: tip + plaka ağırlıklı
-        overall_conf = round(0.4 * tip_conf + 0.4 * plaka_conf + 0.2 * 1.0, 2)
-
-        arac_bilgisi = {
-            "tip":              best_tip,
-            "plaka":            best_plaka,
-            "renk":             best_renk,
-            "confidence_score": overall_conf,
-        }
-
-        if self.logger:
-            self.logger.info(
-                f"Arac bilgisi → tip:{best_tip} | "
-                f"plaka:{best_plaka} | renk:{best_renk} | "
-                f"conf:{overall_conf}"
-            )
-
-        tespitler = merge_consecutive_detections(tespitler)
-
-        return format_final_output({
-            "video_id":     video_name,
-            "arac_bilgisi": arac_bilgisi,
-            "tespitler":    tespitler,
+        tespitler.append({
+            "zaman_saniye": zaman_saniye,
+            "kategori": kategori,
+            "etiket": sinif_adi,
+            "confidence_score": guven,
         })
 
+    return tespitler
 
-def run_inference(
-    video_path: str,
-    model_a_weights: str,
-    model_b_weights: str,
-    timeout_seconds: float = 570,
-    device: str = "0",
-    logger=None,
-) -> dict[str, Any]:
-    executor = InferenceExecutor(
-        model_a_weights=model_a_weights,
-        model_b_weights=model_b_weights,
-        device=device,
-        logger=logger,
+
+def cikarimi_calistir(video_yolu: str, config: dict, logger) -> dict:
+    """Tum video uzerinde kare-kare cikarim yapar ve FTR semasina uygun sonucu doner."""
+    video_bilgisi = video_bilgisini_oku(video_yolu)
+    fps = video_bilgisi["fps"]
+    logger.info(f"   - FPS: {fps:.2f} | Cozunurluk: {video_bilgisi['genislik']}x{video_bilgisi['yukseklik']} "
+                f"| Kare sayisi: {video_bilgisi['kare_sayisi']}")
+
+    model_a, model_b = modelleri_yukle(
+        config["yollar"]["model_a_agirlik"], config["yollar"]["model_b_agirlik"], logger
     )
-    return executor.process_video(video_path, timeout_seconds=timeout_seconds)
+
+    slalom_dedektoru = SlalomDedektoru(
+        pencere_kare_sayisi=config["slalom"]["pencere_kare_sayisi"],
+        min_yon_degisimi=config["slalom"]["min_yon_degisimi"],
+        min_genlik_piksel=config["slalom"]["min_genlik_piksel"],
+    )
+    slalom_devam_ediyor = False  # Debounce: ayni slalom hareketini TEKRAR TEKRAR raporlamamak icin
+
+    # Video boyunca biriken istatistikler (tum video icin TEK bir arac_bilgisi uretmek uzere)
+    arac_tipi_sayaci = Counter()
+    renk_sayaci = Counter()
+    plaka_sayaci = Counter()
+    arac_guven_listesi = []
+    plaka_guven_haritasi = {}  # plaka_metni -> en yuksek guven
+
+    tum_tespitler = []
+    kare_atlama = max(1, config["cikarim"]["kare_atlama"])
+
+    cap = cv2.VideoCapture(video_yolu)
+    if not cap.isOpened():
+        raise ValueError(f"Video acilamadi: {video_yolu}")
+
+    kare_indeksi = 0
+    while True:
+        basarili, kare = cap.read()
+        if not basarili:
+            break
+
+        if kare_indeksi % kare_atlama != 0:
+            kare_indeksi += 1
+            continue
+
+        # FTR Madde 3.2: zaman_saniye, FPS uzerinden float olarak hesaplanir.
+        zaman_saniye = kare_indeksi / fps if fps > 0 else 0.0
+
+        sonuc_a, sonuc_b = _frame_cikarimi_yap(model_a, model_b, kare, config)
+
+        # --- Model A: arac tipi / renk / plaka ---
+        a_ozet = _model_a_sonucunu_isle(sonuc_a, kare, config)
+        if a_ozet["arac_tipi"]:
+            arac_tipi_sayaci[a_ozet["arac_tipi"]] += 1
+            arac_guven_listesi.append(a_ozet["arac_tipi_guven"])
+        if a_ozet["renk"]:
+            renk_sayaci[a_ozet["renk"]] += 1
+            arac_guven_listesi.append(a_ozet["renk_guven"])
+        if a_ozet["plaka_metni"]:
+            plaka_sayaci[a_ozet["plaka_metni"]] += 1
+            mevcut_en_iyi = plaka_guven_haritasi.get(a_ozet["plaka_metni"], 0.0)
+            plaka_guven_haritasi[a_ozet["plaka_metni"]] = max(mevcut_en_iyi, a_ozet["plaka_guven"])
+
+        # --- Slalom: arac merkezinin X eksenindeki zamansal salinimi ---
+        if a_ozet["merkez_x"] is not None:
+            slalom_su_an_var = slalom_dedektoru.guncelle(zaman_saniye, a_ozet["merkez_x"])
+            if slalom_su_an_var and not slalom_devam_ediyor:
+                # FTR Madde C: slalom, sabit veri seti OLMADAN, trajektori
+                # analiziyle uretilen DINAMIK bir tespittir; bu yuzden
+                # "arac_hareketi" kategorisinde, diger model tabanli
+                # tespitlerle AYNI semaya uyacak sekilde raporlanir.
+                tum_tespitler.append({
+                    "zaman_saniye": zaman_saniye,
+                    "kategori": "arac_hareketi",
+                    "etiket": "slalom",
+                    # NEDEN sabit 0.75 guven?
+                    #   Bu bir SINIFLANDIRMA modeli ciktisi olmadigi icin
+                    #   olasiliksal bir guven skoru DOGAL OLARAK YOKTUR;
+                    #   heuristigin esik kosullarini (genlik + yon degisim
+                    #   sayisi) ayni anda KARSILAMASI, ORTA-YUKSEK sabit bir
+                    #   guven degeriyle temsil edilir.
+                    "confidence_score": 0.75,
+                })
+            slalom_devam_ediyor = slalom_su_an_var
+
+        # --- Model B: surucu davranisi / nesneler / yolcular ---
+        tum_tespitler.extend(_model_b_sonucunu_isle(sonuc_b, zaman_saniye, config))
+
+        if kare_indeksi % 100 == 0:
+            logger.info(f"   - Islenen kare: {kare_indeksi}/{video_bilgisi['kare_sayisi']}")
+
+        kare_indeksi += 1
+
+    cap.release()
+    logger.info("Video analiz tamamlandi, sonuclar konsolide ediliyor.")
+
+    # --- Video boyunca biriken istatistiklerden TEK bir arac_bilgisi cikar ---
+    en_sik_arac_tipi = arac_tipi_sayaci.most_common(1)[0][0] if arac_tipi_sayaci else ""
+    en_sik_renk = renk_sayaci.most_common(1)[0][0] if renk_sayaci else ""
+    en_sik_plaka = plaka_sayaci.most_common(1)[0][0] if plaka_sayaci else ""
+    plaka_guven = plaka_guven_haritasi.get(en_sik_plaka, 0.0)
+
+    # FTR Madde 3.5: "Arac ozellikleri icin TEK BIR ortak confidence."
+    # Bu, video boyunca toplanan TUM arac-ozelligi guven degerlerinin
+    # (tip + renk, + varsa plaka) ORTALAMASI olarak hesaplanir.
+    tum_guvenler = list(arac_guven_listesi)
+    if plaka_guven > 0:
+        tum_guvenler.append(plaka_guven)
+    ortak_arac_guveni = sum(tum_guvenler) / len(tum_guvenler) if tum_guvenler else 0.0
+
+    arac_bilgisi = {
+        "tip": en_sik_arac_tipi,
+        "plaka": en_sik_plaka,
+        "renk": en_sik_renk,
+        "confidence_score": ortak_arac_guveni,
+    }
+
+    video_dosya_adi = os.path.basename(video_yolu)
+    return cikti_semasini_olustur(video_dosya_adi, arac_bilgisi, tum_tespitler)

@@ -1,0 +1,47 @@
+# =============================================================================
+# docker-compose.yml — Model A (Arac Bilgisi) Egitim Ortami
+# -----------------------------------------------------------------------------
+# NEDEN docker-compose (sadece "docker run" degil)?
+#   5 farkli ekip uyesinin, ayni volume/GPU/komut satiri yapilandirmasini
+#   tek tek ezberlemesi yerine TEK BIR KOMUTLA ("docker compose run train ...")
+#   izole ve tekrarlanabilir sekilde calistirabilmesi icin. Volume tanimlari
+#   sayesinde veri seti ve cikti klasorleri imaj YENIDEN BUILD EDILMEDEN
+#   guncellenebilir.
+# =============================================================================
+services:
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: teknofest/model_a_egitim:latest
+    container_name: model_a_egitim
+
+    # NEDEN "gpus: all"?
+    #   YOLO egitimi GPU'suz pratik olarak 5 saatlik butceye sigmaz.
+    #   NVIDIA Container Toolkit kurulu bir host ustunde tum GPU'lar
+    #   konteynere acilir.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    volumes:
+      # Roboflow'dan indirilen gercek veri seti (buyuk boyutlu oldugu icin
+      # imaj icine gomulmez, host'tan mount edilir).
+      - ./datasets:/workspace/datasets:ro
+      # Egitim ciktilari (best.pt, last.pt, loglar, grafikler) host'a yazilir
+      # ki konteyner silinse bile sonuclar KAYBOLMASIN.
+      - ./runs:/workspace/runs
+      # Ekip uyeleri kendi config dosyalarini imaji yeniden build etmeden
+      # degistirebilsin diye config.yaml da mount edilir (override).
+      - ./config.yaml:/workspace/config.yaml
+
+    # NEDEN command burada bos/varsayilan birakildi?
+    #   Her ekip uyesi kendi denemesini su sekilde calistirir, boylece
+    #   AYNI imaj farkli hiperparametrelerle yeniden kullanilir:
+    #     docker compose run --rm train --batch_size 32 --lr 0.001 --run_name deneme_ali
+    #     docker compose run --rm train --optimizer AdamW --mosaic 0.5 --run_name deneme_zeynep
+    shm_size: "8gb"   # PyTorch DataLoader multi-worker paylasimli bellek ihtiyaci

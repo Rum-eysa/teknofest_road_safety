@@ -1,8 +1,14 @@
-loguru==0.7.0
-opencv-python==4.8.0.74
-numpy==1.24.3
-torch==2.0.1
-ultralytics==8.0.195
-Pillow==10.0.0
-pyyaml==6.0
-tqdm==4.66.1
+# requirements.txt — Cikarim (Inference) Pipeline
+opencv-python-headless>=4.8.0
+ultralytics>=8.2.0
+numpy>=1.24.0
+pandas>=2.0.0
+pydantic>=2.0.0
+pyyaml>=6.0
+loguru>=0.7.0
+tqdm>=4.60.0
+easyocr>=1.7.1
+# NOT: easyocr, kendi PyTorch bagimliligini getirir; bu Dockerfile'da
+# torch, CUDA 12.1 wheel index'inden AYRICA kurulur (bkz. Dockerfile),
+# boylece Model A/B (ultralytics) ve OCR AYNI torch+CUDA kurulumunu
+# PAYLASIR; cakisan/duplike kurulum riski ONLENIR.
